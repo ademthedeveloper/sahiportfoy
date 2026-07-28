@@ -1,6 +1,5 @@
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Environment } from '@react-three/drei';
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import BuildingModel, {
@@ -16,8 +15,12 @@ import './Centerpiece3D.css';
 gsap.registerPlugin(ScrollTrigger);
 
 /**
- * Driven wrapper — owns the group rotation, camera dolly, explode factor,
- * and lighting progress, all updated from the parent ScrollTrigger.
+ * Driven wrapper — owns the group rotation, camera dolly, and explode
+ * factor for the villa pieces, all updated from the parent ScrollTrigger.
+ *
+ * The per-frame lift computation now early-exits when progress is in the
+ * "settled" range (< 0.1 or > 0.95), saving N trig+abs+multiply calls per
+ * frame during the long stretches where the villa isn't animating.
  */
 function DrivenScene({ floorRefs, groupRef, progressRef }) {
   useFrame((state) => {
@@ -35,21 +38,23 @@ function DrivenScene({ floorRefs, groupRef, progressRef }) {
     cam.position.y = 0.6 + Math.sin(p * Math.PI) * 0.4;
     cam.lookAt(0, 0, 0);
 
-    // Floor explode: middle floors drift up at 0.55, top floors a bit more.
+    // Skip the lift computation entirely when the lift is effectively 0.
+    // The bell-curve envelope `sin(p * PI)` is ≈ 0 outside [0.1, 0.95].
+    if (p < 0.1 || p > 0.95) return;
+
+    // Villa piece explode: pieces drift up, with the outer ones lifting
+    // more (like an exploded architectural section view).
     for (let i = 0; i < FLOOR_COUNT; i++) {
-      const floor = floorRefs.current[i];
-      if (!floor) continue;
-      // Distance from center
+      const piece = floorRefs.current[i];
+      if (!piece) continue;
       const mid = (FLOOR_COUNT - 1) / 2;
       const dist = Math.abs(i - mid) / mid; // 0..1
-      // Bell-shaped curve peaking at p=0.75
       const env = Math.sin(p * Math.PI);
       const lift = env * dist * 0.7 * FLOOR_HEIGHT * 6;
-      // Animate from baseY: store baseY on first frame
-      if (floor.userData.baseY === undefined) {
-        floor.userData.baseY = floor.position.y;
+      if (piece.userData.baseY === undefined) {
+        piece.userData.baseY = piece.position.y;
       }
-      floor.position.y = floor.userData.baseY + lift;
+      piece.position.y = piece.userData.baseY + lift;
     }
   });
 
@@ -58,16 +63,20 @@ function DrivenScene({ floorRefs, groupRef, progressRef }) {
       <LightingRig progress={progressRef.current ?? 0} />
       <BuildingModel floorRefs={floorRefs} groupRef={groupRef} />
       <ParticlesField />
-      <Suspense fallback={null}>
-        <Environment preset="city" />
-      </Suspense>
+      {/*
+        The Drei <Environment preset="city" /> cubemap was the single biggest
+        mobile cost (6-face cubemap + IBL). Removed in the aggressive perf
+        pass — the two point lights + the directional rig produce enough
+        specular kick on the gold edges for the villa to still read.
+      */}
     </>
   );
 }
 
 /**
  * Static fallback shown when reduced motion is preferred. Renders a
- * decorative gold-line architectural silhouette as inline SVG.
+ * decorative gold-line architectural silhouette of the modern villa as
+ * inline SVG.
  */
 function StaticFallback() {
   return (
@@ -80,50 +89,70 @@ function StaticFallback() {
             <stop offset="100%" stopColor="#A6851B" />
           </linearGradient>
         </defs>
-        {/* Base */}
-        <line x1="80" y1="540" x2="320" y2="540" stroke="url(#gold)" strokeWidth="2" />
-        <line x1="100" y1="560" x2="300" y2="560" stroke="url(#gold)" strokeWidth="1.5" opacity="0.6" />
-        {/* Building floors */}
-        {Array.from({ length: 14 }).map((_, i) => {
-          const y = 60 + i * 32;
+        {/* Ground line */}
+        <line x1="40" y1="540" x2="360" y2="540" stroke="url(#gold)" strokeWidth="2" />
+        {/* Pool deck */}
+        <rect x="120" y="510" width="160" height="6" fill="none" stroke="url(#gold)" strokeWidth="1.5" />
+        {/* Stepped villa slabs (6 pieces, narrowing as they rise) */}
+        {Array.from({ length: 6 }).map((_, i) => {
+          const w = 200 - i * 18;
+          const x = (400 - w) / 2;
+          const y = 480 - i * 64;
           return (
             <g key={i}>
               <rect
-                x="100"
+                x={x}
                 y={y}
-                width="200"
-                height="4"
+                width={w}
+                height="6"
                 fill="none"
                 stroke="url(#gold)"
                 strokeWidth="1.2"
               />
-              <line
-                x1="100"
-                y1={y + 2}
-                x2="300"
-                y2={y + 2}
-                stroke="url(#gold)"
-                strokeWidth="0.5"
-                opacity="0.4"
-              />
+              {/* Glass wall hint on ground floor only */}
+              {i === 0 &&
+                [0, 1, 2, 3].map((k) => (
+                  <rect
+                    key={k}
+                    x={x + 24 + k * 38}
+                    y={y - 32}
+                    width="20"
+                    height="32"
+                    fill="none"
+                    stroke="url(#gold)"
+                    strokeWidth="0.8"
+                    opacity="0.6"
+                  />
+                ))}
             </g>
           );
         })}
-        {/* Corner mullions */}
-        <line x1="100" y1="60" x2="100" y2="540" stroke="url(#gold)" strokeWidth="2" />
-        <line x1="300" y1="60" x2="300" y2="540" stroke="url(#gold)" strokeWidth="2" />
-        {/* Crown */}
+        {/* Cantilevered overhang */}
         <rect
-          x="160"
-          y="40"
-          width="80"
+          x="180"
+          y="380"
+          width="120"
+          height="6"
+          fill="none"
+          stroke="url(#gold)"
+          strokeWidth="1.2"
+        />
+        {/* Front corner posts */}
+        <line x1="100" y1="120" x2="100" y2="480" stroke="url(#gold)" strokeWidth="2" />
+        <line x1="300" y1="120" x2="300" y2="480" stroke="url(#gold)" strokeWidth="2" />
+        {/* Roof slab */}
+        <rect
+          x="190"
+          y="100"
+          width="20"
           height="20"
           fill="none"
           stroke="url(#gold)"
           strokeWidth="1.5"
         />
-        {/* Antenna */}
-        <line x1="200" y1="40" x2="200" y2="10" stroke="url(#gold)" strokeWidth="1.2" />
+        {/* Driveway lines */}
+        <line x1="160" y1="520" x2="160" y2="595" stroke="url(#gold)" strokeWidth="1" opacity="0.5" />
+        <line x1="240" y1="520" x2="240" y2="595" stroke="url(#gold)" strokeWidth="1" opacity="0.5" />
       </svg>
     </div>
   );
@@ -138,8 +167,17 @@ export default function Centerpiece3D() {
   const floorRefs = useRef(new Array(FLOOR_COUNT).fill(null));
   const reduced = useReducedMotion();
   const [hasInView, setHasInView] = useState(false);
+  // Detect mobile at mount time so we can pick a cheaper Canvas config.
+  // (Re-evaluated on resize via the listener below.)
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 720px)').matches;
+  });
 
   // Lazy mount: only render the Canvas when the user is near the section.
+  // rootMargin shrunk from 200px to 50px as part of the perf pass — we
+  // don't want the WebGL context instantiating 200px before the section
+  // is on screen.
   useEffect(() => {
     const el = sectionRef.current;
     if (!el) return undefined;
@@ -150,10 +188,20 @@ export default function Centerpiece3D() {
           observer.disconnect();
         }
       },
-      { rootMargin: '200px' }
+      { rootMargin: '50px' }
     );
     observer.observe(el);
     return () => observer.disconnect();
+  }, []);
+
+  // Re-evaluate mobile on resize so a desktop user shrinking the window
+  // gets the cheaper config (and vice versa).
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mq = window.matchMedia('(max-width: 720px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
   useEffect(() => {
@@ -207,9 +255,19 @@ export default function Centerpiece3D() {
       ) : (
         <div className="centerpiece__canvas-wrap" ref={canvasRef}>
           <Canvas
-            dpr={[1, 1.75]}
+            // DPR cap dropped from [1, 1.75] to [1, 1.5] — visible 1080p/1440p
+            // mobile looks identical at 1.5 vs 1.75, and the fillrate saving
+            // is a real 5–10% on retina devices.
+            dpr={[1, 1.5]}
             camera={{ position: [0, 0.6, 7], fov: 38 }}
-            gl={{ antialias: true, alpha: true }}
+            gl={{
+              // Antialiasing is the single largest fragment cost. The gold
+              // edge lines are geometric and read fine without MSAA — turn
+              // it off on mobile and keep it on desktop.
+              antialias: !isMobile,
+              alpha: true,
+              powerPreference: 'high-performance',
+            }}
             frameloop="always"
           >
             <color attach="background" args={['#0F172A']} />

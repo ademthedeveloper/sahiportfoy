@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useLanguage } from '../i18n/LanguageContext.jsx';
 import './Navbar.css';
 
+// FAQ link removed in the redesign — there is no FAQ section anymore.
 const NAV_LINKS = [
   { id: 'home', href: '#home' },
   { id: 'about', href: '#about' },
   { id: 'services', href: '#services' },
   { id: 'portfolio', href: '#portfolio' },
-  { id: 'faq', href: '#faq' },
+  { id: 'contact', href: '#contact' },
 ];
 
 export default function Navbar() {
@@ -27,7 +28,8 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
-    const ids = ['home', 'about', 'services', 'portfolio', 'faq', 'contact'];
+    // 'faq' dropped from the observer set since the section no longer exists.
+    const ids = ['home', 'about', 'services', 'portfolio', 'contact'];
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -116,7 +118,7 @@ export default function Navbar() {
 
       <div className={`nav__mobile ${mobileOpen ? 'is-open' : ''}`}>
         <ul>
-          {[...NAV_LINKS, { id: 'contact', href: '#contact' }].map((link) => (
+          {NAV_LINKS.map((link) => (
             <li key={link.id}>
               <a
                 href={link.href}
